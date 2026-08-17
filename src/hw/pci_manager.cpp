@@ -34,6 +34,7 @@ static std::vector<pcidev_info> devinfos_;
 static std::vector<hw::PCI_Device> devices_;
 static std::vector<Driver_entry<PCI_manager::NIC_driver>> nic_fact;
 static std::vector<Driver_entry<PCI_manager::BLK_driver>> blk_fact;
+static std::vector<Driver_entry<PCI_manager::VSOCK_driver>> vsock_fact;
 
 template <typename Factory, typename Class>
 static inline bool register_device(hw::PCI_Device& dev,
@@ -138,6 +139,25 @@ void PCI_manager::init_devices(const uint8_t classcode)
   INFO2("o");
 }
 
+void PCI_manager::init_vsock()
+{
+  INFO2("|- Initializing vsock devices");
+
+  for (const auto& [pci_addr, id, devclass] : devinfos_) {
+    if (devclass.classcode != PCI::COMMUNICATION)
+      continue;
+
+    auto& dev = devices_.emplace_back(pci_addr, id, devclass.reg);
+
+    register_device<VSOCK_driver, hw::Vsock>(
+        dev,
+        vsock_fact
+    );
+  }
+
+  INFO2("o");
+}
+
 void PCI_manager::init()
 {
   INFO("PCI Manager", "Probing PCI bus");
@@ -157,9 +177,15 @@ void PCI_manager::register_nic(uint16_t vendor, uint16_t prod, NIC_driver factor
 {
   nic_fact.emplace_back(driver_id(vendor, prod), factory);
 }
+
 void PCI_manager::register_blk(uint16_t vendor, uint16_t prod, BLK_driver factory)
 {
   blk_fact.emplace_back(driver_id(vendor, prod), factory);
+}
+
+void PCI_manager::register_vsock(uint16_t vendor, uint16_t prod, VSOCK_driver factory)
+{
+  vsock_fact.emplace_back(driver_id(vendor, prod), factory);
 }
 
 }

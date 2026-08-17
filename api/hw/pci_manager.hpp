@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <hw/nic.hpp>
+#include <hw/vsock.hpp>
 #include <hw/block_device.hpp>
 #include <hw/pci_device.hpp>
 
@@ -43,8 +44,12 @@ public:
   using BLK_driver = delegate< std::unique_ptr<hw::Block_device> (PCI_Device&) >;
   static void register_blk(uint16_t, uint16_t, BLK_driver);
 
+  using VSOCK_driver = delegate< std::unique_ptr<hw::Vsock> (PCI_Device&) >;
+  static void register_vsock(uint16_t, uint16_t, VSOCK_driver);
+
   static void init();
   static void init_devices(uint8_t classcode);
+  static void init_vsock();
   /* Returns devices that were attempted to be initialized */
   static Device_vector devices();
   /* Returns all PCI device information except PCI bridges.
