@@ -32,6 +32,7 @@ if (${PLATFORM} STREQUAL "default")
     virtiocon.cpp
     virtioblk.cpp
     virtionet.cpp
+    virtiovsock.cpp
     vmxnet3.cpp
     e1000.cpp
   )
