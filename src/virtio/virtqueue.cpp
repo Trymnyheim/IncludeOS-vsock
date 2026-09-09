@@ -19,7 +19,9 @@
 #define DEBUG // Allow debug
 #define DEBUG2
 
-#include <os>
+#include <kernel/memmap.hpp>
+#include <os.hpp>
+#include <kernel.hpp>
 #include <virtio/virtqueue.hpp>
 #if !defined(__MACH__)
 #include <malloc.h>
@@ -87,7 +89,9 @@ int Virtqueue::enqueue(std::span<Token> buffers) {
         buf.direction() ? VIRTQ_DESC_F_NEXT : VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE;
 
         // Assign raw buffer
-        _queue.desc[_free_head].addr = (uint64_t) buf.data();
+        _queue.desc[_free_head].addr =
+        os::mem::virt_to_phys(
+        reinterpret_cast<uintptr_t>(buf.data()));
         _queue.desc[_free_head].len = buf.size();
 
         last = _free_head;

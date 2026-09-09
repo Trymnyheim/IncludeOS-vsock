@@ -4,11 +4,11 @@
 #include <arch.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
+#include <span>
 #include <utility>
 
-#define ALIGN(x) (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+#define ALIGN(x) (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
 /**
  * Virtqueue implementation in accordance with VirtIO v1.4
@@ -23,22 +23,31 @@ public:
     using u16 = uint16_t;
     using u8 = uint8_t;
 
-    using span = std::pair<uint8_t*, size_t>;
+    using Buffer = std::pair<uint8_t*, size_t>;
 
     class Token {
     public:
-        // "Direction" of tokens
-        using size_type = size_t;
         enum Direction { IN, OUT };
-        inline Token(span buf, Direction d) :
-        data_{ buf.first }, size_{ buf.second }, dir_{ d }
+        
+        inline Token(Buffer buf, Direction d) :
+            data_{ buf.first }, size_{ buf.second }, dir_{ d } 
         {}
-        uint8_t* data() const noexcept { return data_; }
-        size_type size() const noexcept { return size_; }
-        Direction direction() const noexcept { return dir_; }
+
+        uint8_t* data() const noexcept { 
+            return data_; 
+        }
+
+        size_t size() const noexcept {
+            return size_; 
+        }
+
+        Direction direction() const noexcept {
+            return dir_;
+        }
+
     private:
         uint8_t* data_;
-        size_type size_;
+        size_t size_;
         Direction dir_;
     };
 

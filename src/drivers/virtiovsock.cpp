@@ -2,6 +2,7 @@
 #include "virtiovsock.hpp"
 #include <hw/pci_manager.hpp>
 #include <info>
+#include <kernel/events.hpp>
 
 #define VSOCK_DEBUG
 
@@ -25,6 +26,8 @@ VirtioVsock::VirtioVsock(hw::PCI_Device& d) : VirtioPci(d) {
      * 6. Re-read device status to ensure the FEATURES_OK bit is still set: otherwise, the device does not support our 
      * subset of features and the device is unusable.
      */
+
+    VDBG("Starting vsock specific init");
 
     probe_features();
     uint32_t *offered_features = features();
@@ -58,31 +61,64 @@ VirtioVsock::VirtioVsock(hw::PCI_Device& d) : VirtioPci(d) {
 
     /** RX que is 0, TX Queue is 1 - Virtio Std. §5.1.2  */
 
-    uint16_t msix_vector = 0; // How to handle this?
 
-    std::string name = "vsock";
+    std::string name = "vsock"; // TODO: Temp solution
 
     new (&rx_q) Virtqueue(name + ".rx_q", queue_size(), 0, 0);
-    bool success = setup_queue(0, rx_q, msix_vector);
+    bool success = setup_queue(0, rx_q, 0);
     CHECKSERT(success, "RX queue (%u) assigned (%p) to device",
                 rx_q.size(), rx_q.queue_desc());
 
-    new (&tx_q) Virtqueue(name + ".tx_q", queue_size(), 0, 0);
-    success = setup_queue(1, tx_q, msix_vector);
+    new (&tx_q) Virtqueue(name + ".tx_q", queue_size(), 1, 0);
+    success = setup_queue(1, tx_q, 1);
     CHECKSERT(success, "TX queue (%u) assigned (%p) to device",
                 tx_q.size(), tx_q.queue_desc());
 
-    new (&ctrl_q) Virtqueue(name + ".ctrl_q", queue_size(), 0, 0);
-    success = setup_queue(2, ctrl_q, msix_vector);
+    new (&ctrl_q) Virtqueue(name + ".ctrl_q", queue_size(), 2, 0);
+    success = setup_queue(2, ctrl_q, 2);
     CHECKSERT(success, "CTRL queue (%u) assigned (%p) to device",
                 ctrl_q.size(), ctrl_q.queue_desc());
 
+    Events::get().subscribe(
+    get_irq(0),
+    {this, &VirtioVsock::handle_rx});
+
+    Events::get().subscribe(
+        get_irq(1),
+        {this, &VirtioVsock::handle_tx});
+
+    Events::get().subscribe(
+        get_irq(2),
+        {this, &VirtioVsock::handle_event});
+
+
+    for (auto& buffer : rx_buffers_) {
+        Virtqueue::Token token{
+            {buffer.data(), buffer.size()},
+            Virtqueue::Token::IN
+        };
+
+        rx_q.enqueue(std::span{&token, 1});
+    }
+
     this->setup_complete(true);
+    rx_q.kick();
 }
 
-int enqueue_tx(VirtioVsock::Packet& pkt) {
-    VDBG("[VirtioVsock] tx: Transmitting %#zu sized packet \n", pkt.header()->len);
+void VirtioVsock::handle_rx() {
+    VDBG("[VirtioVsock] Event occured on RX queue");
 }
+
+void VirtioVsock::handle_tx() {
+    VDBG("[VirtioVsock] Event occured on TX queue");}
+
+void VirtioVsock::handle_event() {
+    VDBG("[VirtioVsock] Event occured on CTRL queue");}
+
+    void handle_rx();
+
+    void handle_event();
+
 
 
 /**

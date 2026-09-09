@@ -135,6 +135,8 @@ public:
 
     bool map_common_cfg();
 
+    bool map_notify_cfg();
+
     void* map_capability(const uint32_t cfg_type);
 
     /** Tell Virtio device if we're OK or not. Virtio Std. § 3.1.1,step 8*/
@@ -156,12 +158,20 @@ public:
         return _common_cfg;
     }
 
+    volatile virtio_pci_notify_cap* notify_cfg() noexcept {
+        return _notify_cfg;
+    }
+
     // returns true if MSI-X is supported
     bool has_msix() const noexcept { return _pcidev.has_msix(); }
 
     // returns non-zero if MSI-x is supported
     uint8_t get_msix_vectors() const noexcept {
         return _pcidev.get_msix_vectors();
+    }
+
+    uint8_t get_irq(int vector) const noexcept {
+        return irqs[vector];
     }
 
     void move_to_this_cpu();
@@ -180,6 +190,7 @@ protected:
 private:
     hw::PCI_Device& _pcidev;
     volatile virtio_pci_common_cfg* _common_cfg = nullptr;
+    volatile virtio_pci_notify_cap* _notify_cfg = nullptr;
 
     uint32_t _features[4] = {0};
     uint16_t _virtio_device_id = 0;

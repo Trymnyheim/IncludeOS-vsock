@@ -19,6 +19,9 @@
 #define VIRTIO_VSOCK_CID_HOST 2
 #define VIRTIO_VSOCK_CID_MAX 0xffffffff - 1
 
+#define VIRTIO_VSOCK_DEFAULT_BUF_SIZE 4096
+#define VIRTIO_VSOCK_MAX_PKT_SIZE 0xffff
+
 /**
  * Driver should except NO_IMPLIED_STREAM if offered by device 
  * If no feature bit negotiated, the driver acts a if STREAM is negotiated
@@ -35,16 +38,18 @@ class VirtioVsock : public hw::Vsock, private VirtioPci {
             return std::make_unique<VirtioVsock>(d);
         }
 
-        int enqueue_tx(struct virtio_vsock_packet *pkt);
+        void handle_rx();
 
-        void receive();
+        void handle_tx();
+
+        void handle_event();
 
         uint32_t cid() const noexcept {
             return _cid;
         }
 
         uint16_t queue_size() {
-            return 128;
+            return common_cfg()->queue_size;
         }
 
         struct virtio_vsock_hdr { 
@@ -90,14 +95,12 @@ class VirtioVsock : public hw::Vsock, private VirtioPci {
         Virtqueue rx_q;
         Virtqueue tx_q;
         Virtqueue ctrl_q;
-};
 
-/**
- * Internal transport interface for the socket API to use
- */
-class VsockTransport {
-public:
-    // Internal transport interf
+        // Better way to do this
+        std::array<
+            std::array<uint8_t, 4096>,
+            32
+        > rx_buffers_;
 };
 
 /**

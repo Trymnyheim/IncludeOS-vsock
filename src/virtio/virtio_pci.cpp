@@ -58,11 +58,10 @@ VirtioPci::VirtioPci(hw::PCI_Device& dev)
     assert(has_msix() && "Device has not enable MSI-X");
     CHECK(true, "MSI-X is enabled");
 
-    bool found_cfg = map_common_cfg();
-    assert(found_cfg);
+    map_common_cfg();
+    CHECK(true, "Config read and stored");    
 
-
-    
+    map_notify_cfg();
 
     // TODO: 3.1.2 About legacy driver initialization
 
@@ -70,14 +69,18 @@ VirtioPci::VirtioPci(hw::PCI_Device& dev)
     /** Initializing the device by following the sequence specified in §3.1.1 */
 
     /** 1. Reset the device. */
+    INFO2("Resetting device");
     reset();
 
     /** 2. Set the ACKNOWLEDGE status bit: the guest OS has noticed the device. */
+    INFO2("Setting ack-bit");
     _common_cfg->device_status |= VIRTIO_CONFIG_S_ACKNOWLEDGE;
 
     /** 3. Set the DRIVER status bit: the guest OS knows how to drive the device. */
+    INFO2("Setting driver-status-bit");
     _common_cfg->device_status |= VIRTIO_CONFIG_S_DRIVER;
     
+
 
     /** The remaining steps are device specific and therefore needs to be done in a subclass */
 
@@ -135,6 +138,13 @@ bool VirtioPci::map_common_cfg() {
         reinterpret_cast<volatile virtio_pci_common_cfg*>(
             map_capability(VIRTIO_PCI_CAP_COMMON_CFG));
     return _common_cfg != nullptr;
+}
+
+bool VirtioPci::map_notify_cfg() {
+    _notify_cfg =
+        reinterpret_cast<volatile virtio_pci_notify_cap*>(
+            map_capability(VIRTIO_PCI_CAP_NOTIFY_CFG));
+    return _notify_cfg != nullptr;
 }
 
 void* VirtioPci::map_capability(const uint32_t type) {
