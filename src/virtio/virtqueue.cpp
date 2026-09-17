@@ -151,13 +151,13 @@ Virtqueue::Token Virtqueue::dequeue() {
 }
 
 void Virtqueue::disable_interrupts() {
-    _queue.avail->flags |= (1 << VIRTQ_AVAIL_F_NO_INTERRUPT);
+    _queue.avail->flags |= VIRTQ_AVAIL_F_NO_INTERRUPT;
 }
 void Virtqueue::enable_interrupts() {
-    _queue.avail->flags &= ~(1 << VIRTQ_AVAIL_F_NO_INTERRUPT);
+    _queue.avail->flags &= ~VIRTQ_AVAIL_F_NO_INTERRUPT;
 }
 bool Virtqueue::interrupts_enabled() const noexcept {
-    return (_queue.avail->flags & (1 << VIRTQ_AVAIL_F_NO_INTERRUPT)) == 0;
+    return (_queue.avail->flags & VIRTQ_AVAIL_F_NO_INTERRUPT) == 0;
 }
 
 // this will force most of the implementation to not use PCI
@@ -173,7 +173,8 @@ void Virtqueue::kick() {
   __arch_hw_barrier();
   if (!(_queue.used->flags & VIRTQ_USED_F_NO_NOTIFY)) {
     debug("<%s> Kicking virtio. Iobase 0x%x \n", qname.c_str(), _iobase);
-    // hw::outpw(_iobase + VIRTIO_PCI_QUEUE_NOTIFY , _pci_index); // TODO: Fix notify_cap
+    assert(_notify_addr != nullptr);
+    *_notify_addr = _pci_index;
   } else {
     debug("<%s> Virtio device says we can't kick!\n", qname.c_str());
   }

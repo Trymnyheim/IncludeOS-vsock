@@ -175,6 +175,10 @@ public:
 
     uint16_t pci_index() const noexcept { return _pci_index; }
 
+    void set_notify_addr(volatile uint16_t* addr) {
+        _notify_addr = addr;
+    }
+
 private:
     /** Initialize the queue buffer */
     void init_queue(int size, char* buf);
@@ -194,6 +198,7 @@ private:
     uint16_t _desc_in_flight = 0; // Entries in _queue_desc currently in use
     uint16_t _last_used_idx = 0; // Last known value of _queue.used->idx
     uint16_t _pci_index = 0; // Queue nr.
+    volatile uint16_t* _notify_addr = nullptr;
 };
 
 #endif

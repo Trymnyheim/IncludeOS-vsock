@@ -105,6 +105,13 @@ set(NAT_SRCS
     nat/napt.cpp
     )
 
+set(VSOCK_SRCS
+    vsock/connection.cpp
+    vsock/listener.cpp
+    vsock/socket.cpp
+    vsock/transport.cpp
+    )
+
 set(SRCS
     checksum.cpp
     buffer_store.cpp
@@ -129,6 +136,7 @@ SET(OBJLIST
         ${NAT_SRCS}
         ${DNS_SRCS}
         ${DHCP_SRCS}
+        ${VSOCK_SRCS}
     )
 #TODO what else can we strip away from net?
 if (NOT ${PLATFORM} STREQUAL "nano")

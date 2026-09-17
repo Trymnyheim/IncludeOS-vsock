@@ -1,5 +1,6 @@
 
 #include "virtiovsock.hpp"
+#include "net/vsock/packet.hpp"
 #include <hw/pci_manager.hpp>
 #include <info>
 #include <kernel/events.hpp>
@@ -7,7 +8,7 @@
 #define VSOCK_DEBUG
 
 #ifdef VSOCK_DEBUG
-#define VDBG(fmt, ...) INFO("VirtioVsock", fmt, ##__VA_ARGS__)
+#define VDBG(fmt, ...) INFO("VirtioVsock", fmt"\n", ##__VA_ARGS__)
 #else
 #define VDBG(fmt, ...) /* fmt */
 #endif
@@ -29,22 +30,37 @@ VirtioVsock::VirtioVsock(hw::PCI_Device& d) : VirtioPci(d) {
 
     VDBG("Starting vsock specific init");
 
+    /** 
+     * VirtIO Standard 5.10.3.1
+     * Driver should except NO_IMPLIED_STREAM if offered by device 
+     * If no feature bit negotiated, the driver acts a if STREAM is negotiated
+     * If SEQPACKET is negotiated, driver may assume STREAM is also (5.10.3.1)
+     */
+
+    
+
     probe_features();
-    uint32_t *offered_features = features();
+    const uint32_t *offered_features = features();
+    VDBG("Offered features: %08x %08x %08x %08x",
+         offered_features[0], offered_features[1], offered_features[2], offered_features[3]);
 
-    // TODO: Check and handle offered_features
-
-    uint32_t *wanted_features = offered_features;
+    // Bit 32 is VERSION_1. Use split rings and ordinary 16-bit notifications;
+    // EVENT_IDX, packed rings and NOTIFICATION_DATA are not implemented.
+    if (!(offered_features[1] & 1U)) {
+        setup_complete(false);
+        return;
+    }
+    uint32_t wanted_features[4] = {
+        offered_features[0] & (1U << VIRTIO_VSOCK_F_STREAM),
+        1U, 0U, 0U
+    };
     if (!negotiate_features(wanted_features)) {
         setup_complete(false);
         return;
     }
 
-    // TODO: Change features() to take select_value instead
-    CHECK(features()[0] & (1U << VIRTIO_VSOCK_F_STREAM), "Stream socket type is supported");
-    CHECK(features()[0] & (1U << VIRTIO_VSOCK_F_SEQPACKET), "Seqpacket socket type is supported");
-    CHECK(features()[0] & (1U << VIRTIO_VSOCK_F_NO_IMPLIED_STREAM), "Stream socket type is not implied");
-    CHECK(features()[0] & (1U << VIRTIO_CONFIG_S_SUSPEND), "Device can be suspended");
+    VDBG("Negotiated features: %08x %08x %08x %08x",
+         wanted_features[0], wanted_features[1], wanted_features[2], wanted_features[3]);
 
     /**
      * 7. Perform device-specific setup, including discovery of virtqueues for the device, optional per-bus setup, 
@@ -54,42 +70,35 @@ VirtioVsock::VirtioVsock(hw::PCI_Device& d) : VirtioPci(d) {
     auto *device_cfg = map_capability(VIRTIO_PCI_CAP_DEVICE_CFG);
     struct virtio_vsock_config *cfg = (virtio_vsock_config*)device_cfg;
 
-    uint32_t cid = cfg->guest_cid;
-    bool valid_cid = (cid > VIRTIO_VSOCK_CID_HOST || cid >= VIRTIO_VSOCK_CID_MAX);
-    CHECKSERT(valid_cid, "CID (%u) assigned to device", cid);
-    _cid = cid;
+    uint64_t cid = cfg->guest_cid;
+    bool valid_cid = net::vsock::cid_is_valid(cid);
+    CHECKSERT(valid_cid, "CID (%lu) assigned to device", cid);
+    _cid = (uint32_t)cid;
 
     /** RX que is 0, TX Queue is 1 - Virtio Std. §5.1.2  */
 
 
     std::string name = "vsock"; // TODO: Temp solution
 
-    new (&rx_q) Virtqueue(name + ".rx_q", queue_size(), 0, 0);
+    new (&rx_q) Virtqueue(name + ".rx_q", queue_size(0), 0, 0);
     bool success = setup_queue(0, rx_q, 0);
     CHECKSERT(success, "RX queue (%u) assigned (%p) to device",
                 rx_q.size(), rx_q.queue_desc());
 
-    new (&tx_q) Virtqueue(name + ".tx_q", queue_size(), 1, 0);
+    new (&tx_q) Virtqueue(name + ".tx_q", queue_size(1), 1, 0);
     success = setup_queue(1, tx_q, 1);
     CHECKSERT(success, "TX queue (%u) assigned (%p) to device",
                 tx_q.size(), tx_q.queue_desc());
 
-    new (&ctrl_q) Virtqueue(name + ".ctrl_q", queue_size(), 2, 0);
+    new (&ctrl_q) Virtqueue(name + ".ctrl_q", queue_size(2), 2, 0);
     success = setup_queue(2, ctrl_q, 2);
     CHECKSERT(success, "CTRL queue (%u) assigned (%p) to device",
                 ctrl_q.size(), ctrl_q.queue_desc());
 
-    Events::get().subscribe(
-    get_irq(0),
-    {this, &VirtioVsock::handle_rx});
-
-    Events::get().subscribe(
-        get_irq(1),
-        {this, &VirtioVsock::handle_tx});
-
-    Events::get().subscribe(
-        get_irq(2),
-        {this, &VirtioVsock::handle_event});
+    Events::get().subscribe(get_irq(0), {this, &VirtioVsock::handle_rx});
+    Events::get().subscribe(get_irq(1), {this, &VirtioVsock::handle_tx});
+    Events::get().subscribe(get_irq(2), {this, &VirtioVsock::handle_event});
+    VDBG("Subscribed to IRQs %u (RX), %u (TX), %u (CTRL)", get_irq(0), get_irq(1), get_irq(2));
 
 
     for (auto& buffer : rx_buffers_) {
@@ -101,23 +110,81 @@ VirtioVsock::VirtioVsock(hw::PCI_Device& d) : VirtioPci(d) {
         rx_q.enqueue(std::span{&token, 1});
     }
 
+    // TODO: Also add buffers to the ctrl_q
+    rx_q.enable_interrupts();
+    tx_q.enable_interrupts();
+    ctrl_q.enable_interrupts();
+    VDBG("Enabled interrupts on all queues");
     this->setup_complete(true);
     rx_q.kick();
 }
 
 void VirtioVsock::handle_rx() {
-    VDBG("[VirtioVsock] Event occured on RX queue");
+    VDBG("Event occured on RX queue");
+    VDBG("RX completed buffers: %u", rx_q.new_incoming());
+    Virtqueue::Token token = rx_q.dequeue();
+
+    if (token.size() < sizeof(net::vsock::virtio_vsock_hdr)) {
+        VDBG("RX buffer too small (%zu bytes)", token.size());
+        // TODO: What? just ignore or send reset?
+        return;
+    }
+
+    net::vsock::virtio_vsock_hdr wire_hdr;
+    std::memcpy(&wire_hdr, token.data(), sizeof(wire_hdr));
+    net::vsock::Packet::Header hdr{wire_hdr};
+
+    if (token.size() < sizeof(net::vsock::virtio_vsock_hdr) + hdr.len()) {
+        VDBG("RX buffer too small for payload (%zu bytes)", token.size());
+        // TODO: Handle if packet is in different buffer
+        return;
+    }
+
+    const auto* payload_begin = token.data() + sizeof(wire_hdr);
+    auto packet = std::make_unique<net::vsock::Packet>(
+        hdr,
+        std::vector<uint8_t>(payload_begin, payload_begin + hdr.len())
+    );
+    VDBG("Delivering packet to transport layer: %u bytes, op %u", packet->header().len(), packet->header().op());
+    deliver(std::move(packet));
+    // TODO: Dequeue, deliver actual packets, and replenish receive buffers.
 }
 
 void VirtioVsock::handle_tx() {
-    VDBG("[VirtioVsock] Event occured on TX queue");}
+    VDBG("[VirtioVsock] Event occured on TX queue");
+    notify_transmit_available(); // Calls the registered callback in transport
+    VDBG("[VirtioVsock] Notified transport layer of available transmit space");
+}
 
 void VirtioVsock::handle_event() {
-    VDBG("[VirtioVsock] Event occured on CTRL queue");}
+    VDBG("[VirtioVsock] Event occured on CTRL queue");
 
-    void handle_rx();
+    // Temp: Should read from the ctrl_q:
+    struct virtio_vsock_event e = {0};
 
-    void handle_event();
+    struct virtio_vsock_event *event = &e;
+    VDBG("[VirtioVsock] Handling event with id %d (%s)", event->id, 
+            event->id == VIRTIO_VSOCK_EVENT_TRANSPORT_RESET ? "RESET" : "UNKNOWN");
+    
+    if (event->id == VIRTIO_VSOCK_EVENT_TRANSPORT_RESET) {
+        reset();
+    }
+}
+
+/**
+ * The guest_cid configuration field MUST be fetched to determine the current CID when a VIRTIO_VSOCK_EVENT_TRANSPORT_RESET event is received.
+ * Existing connections MUST be shut down when a VIRTIO_VSOCK_EVENT_TRANSPORT_RESET event is received.
+ * Listen connections MUST remain operational with the current CID when a VIRTIO_VSOCK_EVENT_TRANSPORT_RESET event is received.
+ */
+void VirtioVsock::reset() {
+    VirtioPci::reset(); // Maybe do this, maybe the VirtioPci does it itself already
+    // TODO: Refetch guest_cid in config
+    // TODO: Reset connections and change cid for listeners
+}
+
+bool VirtioVsock::try_transmit(Packet_ptr& packet) {
+    return false;
+}
 
 
 
@@ -133,4 +200,3 @@ __attribute__((constructor))
 void autoreg_virtiovsock() {
     hw::PCI_manager::register_vsock(PCI::VENDOR_VIRTIO, 0x1053 , &VirtioVsock::new_instance);
 }
-

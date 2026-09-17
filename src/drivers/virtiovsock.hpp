@@ -6,158 +6,61 @@
 #include <virtio/virtqueue.hpp>
 #include <hw/pci_device.hpp>
 #include <hw/vsock.hpp>
+#include <net/vsock/packet.hpp>
 
-/**
- * From virtio standard v1.4 
- * https://docs.oasis-open.org/virtio/virtio/v1.4/cs01/virtio-v1.4-cs01.html
- */
-
+/** 5.10.3. Feature bits */
 #define VIRTIO_VSOCK_F_STREAM 0
 #define VIRTIO_VSOCK_F_SEQPACKET 1
 #define VIRTIO_VSOCK_F_NO_IMPLIED_STREAM 2
 
-#define VIRTIO_VSOCK_CID_HOST 2
-#define VIRTIO_VSOCK_CID_MAX 0xffffffff - 1
-
-#define VIRTIO_VSOCK_DEFAULT_BUF_SIZE 4096
-#define VIRTIO_VSOCK_MAX_PKT_SIZE 0xffff
-
-/**
- * Driver should except NO_IMPLIED_STREAM if offered by device 
- * If no feature bit negotiated, the driver acts a if STREAM is negotiated
- * If SEQPACKET is negotiated, driver may assume STREAM is also (5.10.3.1)
-*/
-
 // Virtio-vsock device driver
 class VirtioVsock : public hw::Vsock, private VirtioPci {
+public:
+    explicit VirtioVsock(hw::PCI_Device&);
 
-    public:
-        explicit VirtioVsock(hw::PCI_Device&);
+    static std::unique_ptr<hw::Vsock> new_instance(hw::PCI_Device& d) {
+        return std::make_unique<VirtioVsock>(d);
+    }
 
-        static std::unique_ptr<hw::Vsock> new_instance(hw::PCI_Device& d) {
-            return std::make_unique<VirtioVsock>(d);
-        }
+    void handle_rx();
 
-        void handle_rx();
+    void handle_tx();
 
-        void handle_tx();
+    void handle_event();
 
-        void handle_event();
+    void reset();
 
-        uint32_t cid() const noexcept {
-            return _cid;
-        }
+    bool try_transmit(Packet_ptr& packet);
 
-        uint16_t queue_size() {
-            return common_cfg()->queue_size;
-        }
+    uint32_t cid() const noexcept {
+        return _cid;
+    }
 
-        struct virtio_vsock_hdr { 
-            uint64_t src_cid; // Upper 32 bits reserved and zeroed
-            uint64_t dst_cid; // Upper 32 bits reserved and zeroed
-            uint32_t src_port; 
-            uint32_t dst_port; 
-            uint32_t len; 
-            uint16_t type; 
-            uint16_t op; 
-            uint32_t flags; 
-            uint32_t buf_alloc; 
-            uint32_t fwd_cnt; 
-        }__attribute__((packed));
+    uint16_t queue_size(uint16_t index) {
+        common_cfg()->queue_select = index;
+        return common_cfg()->queue_size;
+    }
 
-        struct virtio_vsock_pkt { 
-            struct virtio_vsock_hdr hdr; 
-            uint8_t data[]; 
-        };
+private:
 
-        class Packet {
-        public:
-            struct virtio_vsock_hdr* header() {
-                return &_pkt->hdr;
-            }
+    uint32_t _cid = 0;
 
-            uint8_t* data() noexcept {
-                return _pkt->data;
-            }
+    struct virtio_vsock_config { 
+        uint64_t guest_cid; 
+    };
 
-        private:
-            struct virtio_vsock_pkt *_pkt;
-        };
+    Virtqueue rx_q;
+    Virtqueue tx_q;
+    Virtqueue ctrl_q;
 
-    private:
-    
-        uint32_t _cid = 0;
-
-        struct virtio_vsock_config { 
-            uint64_t guest_cid; 
-        };
-
-        Virtqueue rx_q;
-        Virtqueue tx_q;
-        Virtqueue ctrl_q;
-
-        // Better way to do this
-        std::array<
-            std::array<uint8_t, 4096>,
-            32
-        > rx_buffers_;
+    // Better way to do this
+    std::array<
+        std::array<uint8_t, 4096>,
+        32
+    > rx_buffers_;
 };
 
-/**
- * buf_alloc and fwd_cnt are used for buffer space management of stream sockets. 
- * The guest and the device publish how much buffer space is available per socket. 
- * Only payload bytes are counted and header bytes are not included. 
- * This facilitates flow control so data is never dropped.
- */
 
-/**
- * buf_alloc is the total receive buffer space, in bytes, for this socket. This 
- * includes both free and in-use buffers. fwd_cnt is the free-running bytes received 
- * counter. The sender calculates the amount of free receive buffer space as follows:
- * tx_cnt: Sender's free-running bytes transmitted counter
- */
-uint32_t calculate_peer_free(uint32_t peer_buf_alloc, uint32_t tx_cnt, uint32_t peer_fwd_cnt) {
-    return peer_fwd_cnt - (tx_cnt - peer_fwd_cnt);
-}
-
-/**
- * If there is insufficient buffer space, the sender waits until virtqueue buffers are returned 
- * and checks buf_alloc and fwd_cnt again. Sending the VIRTIO_VSOCK_OP_CREDIT_REQUEST packet 
- * queries how much buffer space is available. The reply to this query is a 
- * VIRTIO_VSOCK_OP_CREDIT_UPDATE packet. It is also valid to send a VIRTIO_VSOCK_OP_CREDIT_UPDATE 
- * packet without previously receiving a VIRTIO_VSOCK_OP_CREDIT_REQUEST packet. 
- * This allows communicating updates any time a change in buffer space occurs. (5.10.6.3)
- */
-
-/**
- * Operation constants used for connection and buffer space management (5.10.6)
- */
-#define VIRTIO_VSOCK_OP_INVALID        0 
-/* Connect operations */ 
-#define VIRTIO_VSOCK_OP_REQUEST        1 
-#define VIRTIO_VSOCK_OP_RESPONSE       2 
-#define VIRTIO_VSOCK_OP_RST            3 
-#define VIRTIO_VSOCK_OP_SHUTDOWN       4 
-/* To send payload */ 
-#define VIRTIO_VSOCK_OP_RW             5 
-/* Tell the peer our credit info */ 
-#define VIRTIO_VSOCK_OP_CREDIT_UPDATE  6 
-/* Request the peer to send the credit info to us */ 
-#define VIRTIO_VSOCK_OP_CREDIT_REQUEST 7
-
-/**
- * VIRTIO_VSOCK_OP_RW data packets MUST only be transmitted when the peer has sufficient 
- * free buffer space for the payload. All packets associated with a stream flow MUST 
- * contain valid information in buf_alloc and fwd_cnt fields. (5.10.6.3.1)
- */
-
-/**
- * Stream sockets provide in-order, guaranteed, connection-oriented delivery without 
- * message boundaries. Seqpacket sockets provide in-order, guaranteed, connection-oriented 
- * delivery with message and record boundaries. (5.10.6.2)
- */
-#define VIRTIO_VSOCK_TYPE_STREAM    1 
-#define VIRTIO_VSOCK_TYPE_SEQPACKET 2
 
 
 /**

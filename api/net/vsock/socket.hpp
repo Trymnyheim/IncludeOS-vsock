@@ -1,4 +1,5 @@
 #include "address.hpp"
+#include "listener.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -24,7 +25,7 @@ public:
      * @param backlog The maximum length to which the queue of pending connections for 
      * sockfd may grow
      */
-    int listen(int backlog);
+    int listen(int backlog, Listener::ConnectCallback);
 
     /**
      * Accepts the first connection request in the backlog and creates a socket for the 
@@ -49,10 +50,10 @@ public:
     int recv(auto buf, int size, int flags);
     
     /** Wrapper for the send-function */
-    int send(auto buf, int size, int flags);
+    int write(auto buf, int size, int flags);
     
     /** Wrapper for the recv-function */
-    int recv(auto buf, int size, int flags);
+    int read(auto buf, int size, int flags);
 
     /** Tears down a socket's connection and frees it from memory */
     int close();
@@ -66,13 +67,32 @@ public:
 private:
     friend class Transport;
 
-    Socket(int type, Transport& transport) 
-        : _type(type), _transport(transport) 
+    enum class State {
+        UNBOUND,
+        BOUND,
+        Listening,
+        Connecting,
+        Connected,
+        Closed
+    };
+
+    Socket(int type, State state, Transport& transport) 
+        : _type(type), _bind_addr({0, 0}), _state(state), _transport(transport) 
     {};
 
-    int _type;
-    std::shared_ptr<Connection> _conn;
-    Transport& _transport;
+    int type() const noexcept {
+        return _type;
+    }
 
+    State state() const noexcept {
+        return _state;
+    }
+
+    int _type;
+    Address _bind_addr;
+    State _state;
+    std::shared_ptr<Connection> _conn;
+    std::shared_ptr<Listener> _listener;
+    Transport& _transport;
 };
 }

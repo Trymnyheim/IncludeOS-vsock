@@ -131,7 +131,7 @@ public:
     bool negotiate_features(uint32_t *features);
 
     /** Assign a queue descriptor to a PCI queue index */
-    bool setup_queue(uint16_t index, const Virtqueue& queue, uint16_t msix_vector);
+    bool setup_queue(uint16_t index, Virtqueue& queue, uint16_t msix_vector);
 
     bool map_common_cfg();
 
@@ -156,10 +156,6 @@ public:
 
     volatile virtio_pci_common_cfg* common_cfg() noexcept {
         return _common_cfg;
-    }
-
-    volatile virtio_pci_notify_cap* notify_cfg() noexcept {
-        return _notify_cfg;
     }
 
     // returns true if MSI-X is supported
@@ -190,7 +186,6 @@ protected:
 private:
     hw::PCI_Device& _pcidev;
     volatile virtio_pci_common_cfg* _common_cfg = nullptr;
-    volatile virtio_pci_notify_cap* _notify_cfg = nullptr;
 
     uint32_t _features[4] = {0};
     uint16_t _virtio_device_id = 0;
@@ -199,6 +194,10 @@ private:
 
     uint8_t current_cpu;
     std::vector<uint8_t> irqs;
+
+    volatile uint8_t* _notify_base = nullptr;
+    uint32_t _notify_multiplier = 0;
+    uint32_t _notify_length = 0;
 };
 
 #endif

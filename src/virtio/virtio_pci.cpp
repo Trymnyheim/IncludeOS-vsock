@@ -58,10 +58,11 @@ VirtioPci::VirtioPci(hw::PCI_Device& dev)
     assert(has_msix() && "Device has not enable MSI-X");
     CHECK(true, "MSI-X is enabled");
 
-    map_common_cfg();
-    CHECK(true, "Config read and stored");    
+    const bool common_mapped = map_common_cfg();
+    CHECKSERT(common_mapped, "Config read and stored");
 
-    map_notify_cfg();
+    const bool notify_mapped = map_notify_cfg();
+    CHECKSERT(notify_mapped, "Notification registers mapped");
 
     // TODO: 3.1.2 About legacy driver initialization
 
@@ -141,10 +142,12 @@ bool VirtioPci::map_common_cfg() {
 }
 
 bool VirtioPci::map_notify_cfg() {
-    _notify_cfg =
-        reinterpret_cast<volatile virtio_pci_notify_cap*>(
+    _notify_multiplier = 0;
+    _notify_length = 0;
+    _notify_base =
+        reinterpret_cast<volatile uint8_t*>(
             map_capability(VIRTIO_PCI_CAP_NOTIFY_CFG));
-    return _notify_cfg != nullptr;
+    return _notify_base != nullptr;
 }
 
 void* VirtioPci::map_capability(const uint32_t type) {
@@ -185,6 +188,18 @@ void* VirtioPci::map_capability(const uint32_t type) {
                 return nullptr;
             }
 
+            if (type == VIRTIO_PCI_CAP_NOTIFY_CFG) {
+                // The multiplier is in PCI config space, not in the BAR.
+                if (cap_len < sizeof(virtio_pci_notify_cap) || cap_pos > 0xec ||
+                    length < sizeof(uint16_t) || (offset & 1))
+                    return nullptr;
+                const uint32_t multiplier = _pcidev.read32(cap_pos + 16);
+                if (multiplier & 1)
+                    return nullptr;
+                _notify_multiplier = multiplier;
+                _notify_length = length;
+            }
+
             return (void*)(bar.start + offset);
         }
         cap_pos = cap_next;
@@ -192,7 +207,7 @@ void* VirtioPci::map_capability(const uint32_t type) {
     return nullptr;
 }
 
-bool VirtioPci::setup_queue(uint16_t index, const Virtqueue& queue, uint16_t msix_vector)
+bool VirtioPci::setup_queue(uint16_t index, Virtqueue& queue, uint16_t msix_vector)
 {
     auto* cfg = common_cfg();
     if (cfg == nullptr)
@@ -205,14 +220,11 @@ bool VirtioPci::setup_queue(uint16_t index, const Virtqueue& queue, uint16_t msi
 
     cfg->queue_size = queue.size();
 
-    cfg->queue_desc = os::mem::virt_to_phys(
-        reinterpret_cast<uintptr_t>(queue.queue_desc()));
+    cfg->queue_desc = reinterpret_cast<uintptr_t>(queue.queue_desc());
 
-    cfg->queue_driver = os::mem::virt_to_phys(
-    reinterpret_cast<uintptr_t>(queue.queue_avail()));
+    cfg->queue_driver = reinterpret_cast<uintptr_t>(queue.queue_avail());
 
-    cfg->queue_device = os::mem::virt_to_phys(
-        reinterpret_cast<uintptr_t>(queue.queue_used()));
+    cfg->queue_device = reinterpret_cast<uintptr_t>(queue.queue_used());
 
     if (has_msix()) {
         cfg->queue_msix_vector = msix_vector;
@@ -220,6 +232,15 @@ bool VirtioPci::setup_queue(uint16_t index, const Virtqueue& queue, uint16_t msi
         if (cfg->queue_msix_vector == 0xffff)
             return false;
     }
+
+    const uint64_t offset =
+        uint64_t(cfg->queue_notify_off) * _notify_multiplier;
+
+    if (!_notify_base || offset + sizeof(uint16_t) > _notify_length)
+        return false;
+
+    queue.set_notify_addr(
+        reinterpret_cast<volatile uint16_t*>(_notify_base + offset));
 
     cfg->queue_enable = 1;
     return cfg->queue_enable == 1;
